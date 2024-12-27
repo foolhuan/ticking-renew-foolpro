@@ -1,3 +1,4 @@
-Last renewal time: 2024-12-25 00:51:22
-Status: Failed
-Error message: Could not find expiration times
+Server ID: Unknown
+Renew status: Failed
+Last renewal time: 2024-12-27 12:19:23
+Error: An error occurred: Unable to login to dashboard
