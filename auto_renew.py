@@ -7,9 +7,17 @@ from datetime import datetime
 import time
 from dateutil import parser
 import os
+import requests
+import re
 
-# 此处单引号里添加名为pterodactyl_session的cookie或在settings-actons里设置secrets环境变量,建议在secrets中设置环境变量
-SESSION_COOKIE = os.getenv('PTERODACTYL_SESSION', '')   
+# 从环境变量读取登录凭据，默认使用PTERODACTYL_SESSION，账号密码作为备用方案，请在settings-actons里设置环境变量 
+EMAIL = os.getenv('EMAIL', '')        # 登录邮箱
+PASSWORD = os.getenv('PASSWORD', '')  # 登录密码
+SESSION_COOKIE = os.getenv('PTERODACTYL_SESSION', '')
+
+# Telegram Bot 通知配置（可选）
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
 def setup_driver():
     options = webdriver.ChromeOptions()
@@ -49,6 +57,146 @@ def add_cookies(driver):
     
     print("Current cookies after adding:", driver.get_cookies())
 
+def login_to_dashboard(driver):
+    # try cookie login frist
+    try:
+        print("Attempting to login with cookies...")
+        driver.get("https://tickhosting.com/")
+        time.sleep(5)
+        
+        print("Adding cookies...")
+        add_cookies(driver)
+        
+        print("Refreshing page after adding cookies...")
+        driver.refresh()
+        time.sleep(5)
+        
+        dashboard_urls = [
+            'https://tickhosting.com'
+        ]
+        
+        for url in dashboard_urls:
+            try:
+                print(f"Attempting to navigate to: {url}")
+                driver.get(url)
+                time.sleep(5)
+                
+                print(f"Current URL after navigation: {driver.current_url}")
+                print(f"Current page title: {driver.title}")
+                
+                if driver.current_url.startswith('https://tickhosting.com') and 'Dashboard' in driver.title:
+                    print("Cookie login successful!")
+                    return True
+            except Exception as e:
+                print(f"Failed to navigate to {url}: {e}")
+        
+        print("Cookie login failed to reach dashboard.")
+    except Exception as e:
+        print(f"Cookie login error: {str(e)}")
+    
+    # if cookie login fails, try email and password
+    try:
+        if not EMAIL or not PASSWORD:
+            raise ValueError("Email or password not set in environment variables")
+        
+        print("Attempting to login with email and password...")
+        driver.get('https://tickhosting.com/auth/login')
+        
+        # wait for the login page to load
+        time.sleep(8)
+        
+        # try different email and password input selectors
+        email_selectors = [
+            (By.NAME, 'username'),  
+            (By.ID, 'email'),
+            (By.NAME, 'email'),
+            (By.XPATH, "//input[@type='email']"),
+        ]
+        
+        password_selectors = [
+            (By.NAME, 'password'),  
+            (By.ID, 'password'),
+            (By.XPATH, "//input[@type='password']"),
+        ]
+        
+        login_button_selectors = [
+            (By.XPATH, "//button[@type='submit']"),
+            (By.XPATH, "//button[contains(text(), 'Login')]"),
+        ]
+        
+        # find the email and password input fields
+        email_input = None
+        for selector in email_selectors:
+            try:
+                email_input = driver.find_element(*selector)
+                print(f"Found email input with selector: {selector}")
+                break
+            except Exception as e:
+                print(f"Failed to find email input with selector {selector}: {e}")
+        
+        if not email_input:
+            raise Exception("Could not find email input field")
+        
+        password_input = None
+        for selector in password_selectors:
+            try:
+                password_input = driver.find_element(*selector)
+                print(f"Found password input with selector: {selector}")
+                break
+            except Exception as e:
+                print(f"Failed to find password input with selector {selector}: {e}")
+        
+        if not password_input:
+            raise Exception("Could not find password input field")
+        
+        login_button = None
+        for selector in login_button_selectors:
+            try:
+                login_button = driver.find_element(*selector)
+                print(f"Found login button with selector: {selector}")
+                break
+            except Exception as e:
+                print(f"Failed to find login button with selector {selector}: {e}")
+        
+        if not login_button:
+            raise Exception("Could not find login button")
+        
+        email_input.clear()
+        email_input.send_keys(EMAIL)
+        password_input.clear()
+        password_input.send_keys(PASSWORD)
+        
+        login_button.click()
+        
+        time.sleep(10)
+        
+        dashboard_urls = [
+            'https://tickhosting.com'
+        ]
+        
+        for url in dashboard_urls:
+            try:
+                print(f"Attempting to navigate to: {url}")
+                driver.get(url)
+                time.sleep(5)
+                
+                print(f"Current URL after email login: {driver.current_url}")
+                print(f"Current page title: {driver.title}")
+                
+                if driver.current_url.startswith('https://tickhosting.com') and 'Dashboard' in driver.title:
+                    print("Email/password login successful!")
+                    return True
+            except Exception as e:
+                print(f"Failed to navigate to {url}: {e}")
+        
+        raise Exception("Login did not reach dashboard")
+    
+    except Exception as e:
+        print(f"Login failed: {str(e)}")
+        # 发送 Telegram 通知
+        send_telegram_message(f"Auto Renew Login Error: {str(e)}")
+        return False
+
 def try_login(driver):
     try:
         print("\nAttempting to navigate to dashboard...")
@@ -70,6 +218,41 @@ def try_login(driver):
         print(f"Error during login attempt: {str(e)}")
         return False
 
+def login_with_credentials(driver):
+    try:
+        # get the login page
+        driver.get('https://tickhosting.com/auth/login')
+        
+        # wait for the login page to load
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.NAME, 'email'))
+        )
+        
+        # Locate the mailbox and password input box
+        email_input = driver.find_element(By.NAME, 'email')
+        password_input = driver.find_element(By.NAME, 'password')
+        
+        email_input.clear()
+        email_input.send_keys(EMAIL)
+        password_input.clear()
+        password_input.send_keys(PASSWORD)
+        
+        # Locate and click the login button
+        login_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Login') or contains(text(), '登录')]")
+        login_button.click()
+        
+        # wait for login to complete
+        WebDriverWait(driver, 10).until(
+            EC.url_contains('dashboard')
+        )
+        
+        print("Login successful!")
+        return True
+    
+    except Exception as e:
+        print(f"Login failed: {str(e)}")
+        return False
+
 def wait_and_find_element(driver, by, value, timeout=20, description=""):
     try:
         print(f"Waiting for element: {description} ({value})")
@@ -87,42 +270,68 @@ def wait_and_find_element(driver, by, value, timeout=20, description=""):
         driver.save_screenshot(f'debug_{description.lower().replace(" ", "_")}.png')
         raise
 
-def update_last_renew_time(success, new_time=None, error_message=None):
+def send_telegram_message(message):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram bot token or chat ID not configured. Skipping Telegram notification.")
+        return False
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
+    }
+    
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()  
+        print("Telegram notification sent successfully.")
+        return True
+    except Exception as e:
+        print(f"Failed to send Telegram notification: {e}")
+        return False
+
+def update_last_renew_time(success, new_time=None, error_message=None, server_id=None):
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     status = "Success" if success else "Failed"
-    content = f"Last renewal time: {current_time}\nStatus: {status}"
-    if new_time:
-        content += f"\nNew expiration time: {new_time}"
-    if error_message:
-        content += f"\nError message: {error_message}"
+    
+    content = f"Server ID: {server_id or 'Unknown'}\n"
+    content += f"Renew status: {status}\n"
+    content += f"Last renewal time: {current_time}\n"
+    
+    # if rennew successfuul，add new expiration time
+    if success and new_time:
+        content += f"New expiration time: {new_time}"
+    elif not success and error_message:
+        content += f"Error: {error_message}"
     
     with open('last_renew_data.txt', 'w', encoding='utf-8') as f:
         f.write(content)
+    
+    # send Telegram notification
+    telegram_message = f"**Tickhosting Server Renewal Notification**\n{content}"
+    send_telegram_message(telegram_message)
 
 def get_expiration_time(driver):
-    expiry_selectors = [
-        ("xpath", "//div[contains(@class, 'RenewBox___StyledP-sc-1inh2rq-4')]"),
-        ("xpath", "//div[contains(text(), 'Expired')]"),
-        ("xpath", "//div[contains(text(), 'EXPIRED:')]"),
-        ("xpath", "//div[contains(@class, 'expiry')]"),
-        ("xpath", "//div[contains(@class, 'server-details')]//div[contains(text(), 'Expires')]"),
-        ("xpath", "//span[contains(text(), 'Expires')]"),
-        ("xpath", "//div[contains(text(), 'Free server')]")
-    ]
-    
-    for selector_type, selector in expiry_selectors:
-        try:
-            element = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((selector_type, selector))
-            )
-            expiry_text = element.text
+    try:
+        elements = driver.find_elements(By.CSS_SELECTOR, ".RenewBox___StyledP-sc-1inh2rq-4")
+        
+        if elements:
+            expiry_text = elements[0].text
             print(f"Found expiration time: {expiry_text}")
+            
+            if expiry_text.startswith("EXPIRED: "):
+                expiry_text = expiry_text.replace("EXPIRED: ", "").strip()
+            
             return expiry_text
-        except Exception as e:
-            print(f"Failed to find with selector {selector}: {e}")
+        else:
+            print("No expiration time elements found")
+            return None
     
-    print("Could not find expiration time with any selector")
-    return None
+    except Exception as e:
+        print(f"Error finding expiration time: {e}")
+        return None
 
 def main():
     driver = None
@@ -135,10 +344,11 @@ def main():
         driver.get("https://tickhosting.com")
         time.sleep(5)
         
-        print("Adding cookies...")
-        add_cookies(driver)
-
-        print("Refreshing page after adding cookies...")
+        # try login to dashboard
+        if not login_to_dashboard(driver):
+            raise Exception("Unable to login to dashboard")
+        
+        print("Refreshing page after login...")
         driver.refresh()
         time.sleep(5)  # Give more time for the page to load
 
@@ -197,31 +407,75 @@ def main():
         print("Clicking server element...")
         driver.execute_script("arguments[0].click();", server_element)
         
-        # Increase wait time to ensure page is fully loaded
+        # Wait for server page to load completely
         print("Waiting for server page to load completely...")
-        time.sleep(15)  # Increase to 15 seconds
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+
+        # Print current URL immediately after page load
+        print(f"Server page URL after load: {driver.current_url}")
+        
+        # Print page title for additional verification
+        print(f"Server page title: {driver.title}")
 
         print("Taking screenshot of server page...")
         driver.save_screenshot('debug_server_page.png')
 
-        # Commented out button printing
-        all_buttons = driver.find_elements(By.TAG_NAME, "button")
-        # for idx, button in enumerate(all_buttons):
-        #     print(f"Button {idx + 1}:")
-        #     print(f"Text: {button.text}")
-        #     print(f"Class: {button.get_attribute('class')}")
-        #     print(f"HTML: {button.get_attribute('outerHTML')}\n")
+        # Additional logging to ensure URL is captured
+        print(f"Confirmed server page URL: {driver.current_url}")
 
-        print("\nLooking for renew button...")
+        # Print full page source
+        print("\nFull Page Source (first 10000 characters):")
+        print(driver.page_source[:10000])
+        
+        # print button elements
+        all_buttons = driver.find_elements(By.TAG_NAME, "button")
+        print(f"\nTotal buttons found: {len(all_buttons)}")
+        for idx, button in enumerate(all_buttons, 1):
+            try:
+                print(f"Button {idx}:")
+                print(f"  Text: '{button.text}'")
+                print(f"  Visible: {button.is_displayed()}")
+                print(f"  Enabled: {button.is_enabled()}")
+                print(f"  Class: '{button.get_attribute('class')}'")
+                print(f"  Outer HTML: '{button.get_attribute('outerHTML')}'")
+                print("---")
+            except Exception as e:
+                print(f"Error processing button {idx}: {e}")
+        
+        # print span elements
+        all_spans = driver.find_elements(By.TAG_NAME, "span")
+        print(f"\nTotal spans found: {len(all_spans)}")
+        for idx, span in enumerate(all_spans, 1):
+            try:
+                print(f"Span {idx}:")
+                print(f"  Text: '{span.text}'")
+                print(f"  Class: '{span.get_attribute('class')}'")
+                print(f"  Outer HTML: '{span.get_attribute('outerHTML')}'")
+                print("---")
+            except Exception as e:
+                print(f"Error processing span {idx}: {e}")
+        
+        # get server ID
+        try:
+            current_url = driver.current_url
+            print(f"\nCurrent URL: {current_url}")
+            
+            server_id_match = re.search(r'/server/([a-f0-9]+)', current_url)
+            server_id = server_id_match.group(1) if server_id_match else 'Unknown'
+            
+            print(f"Extracted Server ID: {server_id}")
+        except Exception as e:
+            print(f"Error extracting server ID: {e}")
+            server_id = 'Unknown'
+
         renew_selectors = [
-            # Match class name exactly
+            ("xpath", "//span[contains(@class, 'Button___StyledSpan-sc-1qu1gou-2')]/parent::button"),
             ("css", "button.Button__ButtonStyle-sc-1qu1gou-0.beoWBB.RenewBox___StyledButton-sc-1inh2rq-7.hMqrbU"),
-            # Match class name partially
             ("xpath", "//button[contains(@class, 'Button__ButtonStyle-sc-1qu1gou-0') and contains(@class, 'RenewBox___StyledButton')]"),
-            # Match text content
             ("xpath", "//button[.//span[text()='ADD 96 HOUR(S)']]"),
             ("xpath", "//button[.//span[contains(text(), 'ADD 96 HOUR')]]"),
-            # Match color attribute
             ("xpath", "//button[@color='primary' and contains(@class, 'Button__ButtonStyle')]")
         ]
 
@@ -264,33 +518,47 @@ def main():
         renew_button.click()
 
         # Wait for page to update
-        time.sleep(10)  # Increased wait time
+        time.sleep(70)  # Increased wait time
         driver.refresh()
-        time.sleep(5)  # Additional wait after refresh
+        time.sleep(8)  # Additional wait after refresh
 
-        # Get new expiration time
-        new_time = get_expiration_time(driver)
+        new_expiration_time = get_expiration_time(driver)
 
-        # Compare times
-        if initial_time and new_time:
+        if initial_time and new_expiration_time:
             try:
                 initial_datetime = parser.parse(initial_time)
-                new_datetime = parser.parse(new_time)
+                new_datetime = parser.parse(new_expiration_time)
                 
                 if new_datetime > initial_datetime:
                     print("Renewal successful! Time has been extended.")
                     print(f"Initial time: {initial_time}")
-                    print(f"New time: {new_time}")
-                    update_last_renew_time(True, new_time)
+                    print(f"New time: {new_expiration_time}")
+                    update_last_renew_time(
+                        success=True, 
+                        new_time=new_expiration_time, 
+                        server_id=server_id
+                    )
                 else:
                     print("Renewal may have failed. Time was not extended.")
-                    update_last_renew_time(False, error_message="Time not extended")
+                    update_last_renew_time(
+                        success=False, 
+                        error_message="Time not extended",
+                        server_id=server_id
+                    )
             except Exception as e:
                 print(f"Error parsing dates: {str(e)}")
-                update_last_renew_time(False, error_message=f"Date parsing error: {str(e)}")
+                update_last_renew_time(
+                    success=False, 
+                    error_message=f"Date parsing error: {str(e)}",
+                    server_id=server_id
+                )
         else:
             print("Could not verify renewal - unable to get expiration times")
-            update_last_renew_time(False, error_message="Could not find expiration times")
+            update_last_renew_time(
+                success=False, 
+                error_message="Could not find expiration times",
+                server_id=server_id
+            )
 
     except TimeoutException as e:
         error_msg = f"Timeout error: {str(e)}"
